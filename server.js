@@ -33,6 +33,10 @@ const allowedOrigins = [
   'https://doctoral-studies.vercel.app', // Для продакшена
 ];
 
+
+
+
+
 // Middleware для CORS
 app.use(
   cors({
