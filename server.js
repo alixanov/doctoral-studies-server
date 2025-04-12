@@ -27,13 +27,28 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Middleware
-app.use(cors({
-  origin: 'http://localhost:3000',
-  origin: 'https://doctoral-studies.vercel.app',
+// Разрешенные источники
+const allowedOrigins = [
+  'http://localhost:3000', // Для разработки
+  'https://doctoral-studies.vercel.app', // Для продакшена
+];
 
-  credentials: true,
-}));
+// Middleware для CORS
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Разрешаем запросы без origin (например, от серверных приложений)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      } else {
+        return callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true, // Разрешаем отправку куки и заголовков авторизации
+  })
+);
+
 app.use(express.json());
 // Статическая папка для доступа к загруженным файлам
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
