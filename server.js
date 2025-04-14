@@ -1,3 +1,4 @@
+// Server-side (backend) - server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -9,7 +10,7 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 require('dotenv').config();
 
-// Настройка Cloudinary
+// Cloudinary configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -20,7 +21,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
-// Настройка Cloudinary Storage для multer
+// Cloudinary Storage for multer
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
@@ -29,10 +30,6 @@ const storage = new CloudinaryStorage({
     transformation: [{ width: 1000, height: 1000, crop: 'limit' }]
   }
 });
-
-
-
-
 
 const upload = multer({
   storage: storage,
@@ -45,9 +42,10 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Подключение к MongoDB
+// MongoDB connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/doctoral', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -55,7 +53,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/doctoral'
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Модели данных
+// Data models
 const UserSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
@@ -73,8 +71,8 @@ const DocumentSchema = new mongoose.Schema({
   files: [{
     fieldName: { type: String, required: true },
     originalName: { type: String, required: true },
-    cloudinaryUrl: { type: String, required: true }, // Ссылка на Cloudinary
-    publicId: { type: String, required: true }, // ID в Cloudinary
+    cloudinaryUrl: { type: String, required: true },
+    publicId: { type: String, required: true },
     size: { type: Number },
     mimetype: { type: String }
   }],
@@ -88,7 +86,7 @@ const DocumentSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 const Document = mongoose.model('Document', DocumentSchema);
 
-// Middleware для проверки JWT
+// JWT authentication middleware
 const authenticateJWT = (req, res, next) => {
   const token = req.headers['authorization'];
 
@@ -101,22 +99,22 @@ const authenticateJWT = (req, res, next) => {
   });
 };
 
-// Middleware для проверки роли проверяющего
+// Reviewer role check middleware
 const checkReviewerRole = (req, res, next) => {
   if (req.user.role !== 'reviewer') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
+    return res.status(403).json({ error: 'Access denied' });
   }
   next();
 };
 
-// Регистрация докторанта
+// Doctoral registration
 app.post('/register-doctoral', async (req, res) => {
   try {
     const { firstName, lastName, login, password } = req.body;
 
     const existingUser = await User.findOne({ login });
     if (existingUser) {
-      return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
+      return res.status(400).json({ error: 'User already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -131,21 +129,21 @@ app.post('/register-doctoral', async (req, res) => {
 
     await newUser.save();
 
-    res.status(201).json({ message: 'Докторант успешно зарегистрирован' });
+    res.status(201).json({ message: 'Doctoral student registered successfully' });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ error: 'Ошибка при регистрации' });
+    res.status(500).json({ error: 'Registration failed' });
   }
 });
 
-// Регистрация проверяющего
+// Reviewer registration
 app.post('/register-reviewer', async (req, res) => {
   try {
     const { firstName, lastName, login, password } = req.body;
 
     const existingUser = await User.findOne({ login });
     if (existingUser) {
-      return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
+      return res.status(400).json({ error: 'User already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -160,26 +158,29 @@ app.post('/register-reviewer', async (req, res) => {
 
     await newUser.save();
 
-    res.status(201).json({ message: 'Проверяющий успешно зарегистрирован' });
+
+
+    
+    res.status(201).json({ message: 'Reviewer registered successfully' });
   } catch (error) {
     console.error('Reviewer registration error:', error);
-    res.status(500).json({ error: 'Ошибка при регистрации проверяющего' });
+    res.status(500).json({ error: 'Reviewer registration failed' });
   }
 });
 
-// Авторизация
+// Login
 app.post('/login', async (req, res) => {
   try {
     const { login, password, role } = req.body;
 
     const user = await User.findOne({ login, role });
     if (!user) {
-      return res.status(401).json({ error: 'Неверный логин или роль' });
+      return res.status(401).json({ error: 'Invalid login or role' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Неверный пароль' });
+      return res.status(401).json({ error: 'Invalid password' });
     }
 
     const token = jwt.sign(
@@ -205,47 +206,43 @@ app.post('/login', async (req, res) => {
     res.json({ token, user: userData });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: 'Ошибка при авторизации' });
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
-// Отправка документов докторантом
-// server.js (исправленная часть для отправки документов)
+// Document submission
 app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) => {
   try {
     const { subject, recipient, content } = req.body;
     const userId = req.user.id;
 
-    // Валидация обязательных полей
+    // Validation
     if (!subject || !recipient || !content) {
       return res.status(400).json({
-        error: 'Все текстовые поля обязательны',
+        error: 'All fields are required',
         details: {
-          subject: !subject ? 'Тема обязательна' : null,
-          recipient: !recipient ? 'Получатель обязателен' : null,
-          content: !content ? 'Содержание обязательно' : null
+          subject: !subject ? 'Subject is required' : null,
+          recipient: !recipient ? 'Recipient is required' : null,
+          content: !content ? 'Content is required' : null
         }
       });
     }
 
-    // Проверка наличия хотя бы одного файла
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
-        error: 'Необходимо загрузить хотя бы один файл'
+        error: 'At least one file is required'
       });
     }
 
-    // Проверка размера каждого файла
     const maxFileSize = 10 * 1024 * 1024; // 10MB
     const oversizedFiles = req.files.filter(file => file.size > maxFileSize);
     if (oversizedFiles.length > 0) {
       return res.status(400).json({
-        error: 'Некоторые файлы превышают максимальный размер (10MB)',
+        error: 'Some files exceed maximum size (10MB)',
         oversizedFiles: oversizedFiles.map(f => f.originalname)
       });
     }
 
-    // Обработка загруженных файлов через Cloudinary
     const files = req.files.map(file => ({
       fieldName: file.fieldname,
       originalName: file.originalname,
@@ -255,7 +252,6 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
       mimetype: file.mimetype
     }));
 
-    // Создание нового документа
     const newDocument = new Document({
       userId,
       subject,
@@ -268,7 +264,7 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
     await newDocument.save();
 
     res.status(201).json({
-      message: 'Документы успешно отправлены',
+      message: 'Documents submitted successfully',
       documentId: newDocument._id,
       filesCount: files.length
     });
@@ -276,7 +272,6 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
   } catch (error) {
     console.error('Document submission error:', error);
 
-    // Удаление уже загруженных файлов при ошибке
     if (req.files && req.files.length > 0) {
       try {
         await Promise.all(
@@ -289,13 +284,13 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
     }
 
     res.status(500).json({
-      error: 'Ошибка при отправке документов',
+      error: 'Document submission failed',
       details: error.message
     });
   }
 });
 
-// Получение всех заявок для проверяющего
+// Get applications for reviewer
 app.get('/applications', authenticateJWT, checkReviewerRole, async (req, res) => {
   try {
     const documents = await Document.find({ status: { $in: ['pending', 'reviewed'] } })
@@ -310,18 +305,18 @@ app.get('/applications', authenticateJWT, checkReviewerRole, async (req, res) =>
     res.json(formattedDocs);
   } catch (error) {
     console.error('Get applications error:', error);
-    res.status(500).json({ error: 'Ошибка при получении заявок' });
+    res.status(500).json({ error: 'Failed to get applications' });
   }
 });
 
-// Обновление статуса заявки проверяющим
+// Update application status
 app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async (req, res) => {
   try {
     const { status, comment } = req.body;
     const { id } = req.params;
 
     if (!status || !['approved', 'rejected'].includes(status)) {
-      return res.status(400).json({ error: 'Неверный статус' });
+      return res.status(400).json({ error: 'Invalid status' });
     }
 
     const updatedDoc = await Document.findByIdAndUpdate(
@@ -336,7 +331,7 @@ app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async 
     ).populate('userId', 'firstName lastName login');
 
     if (!updatedDoc) {
-      return res.status(404).json({ error: 'Документ не найден' });
+      return res.status(404).json({ error: 'Document not found' });
     }
 
     const responseDoc = {
@@ -347,11 +342,11 @@ app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async 
     res.json(responseDoc);
   } catch (error) {
     console.error('Decision error:', error);
-    res.status(500).json({ error: 'Ошибка при обновлении статуса' });
+    res.status(500).json({ error: 'Failed to update status' });
   }
 });
 
-// Получение документов пользователя
+// Get user documents
 app.get('/user-documents', authenticateJWT, async (req, res) => {
   try {
     const documents = await Document.find({ userId: req.user.id })
@@ -360,77 +355,74 @@ app.get('/user-documents', authenticateJWT, async (req, res) => {
     res.json(documents);
   } catch (error) {
     console.error('Get documents error:', error);
-    res.status(500).json({ error: 'Ошибка при получении документов' });
+    res.status(500).json({ error: 'Failed to get documents' });
   }
 });
 
-// Новый метод для получения URL файла
+// Get file URL
 app.get('/file/:documentId/:fileId', authenticateJWT, async (req, res) => {
   try {
     const document = await Document.findOne({
       _id: req.params.documentId,
       $or: [
-        { userId: req.user.id }, // Докторант может получить свои файлы
-        { reviewerId: req.user.id }, // Проверяющий может получить файлы заявок, которые он проверял
-        { status: { $ne: 'pending' } } // Проверяющие могут видеть любые не ожидающие проверки документы
+        { userId: req.user.id },
+        { reviewerId: req.user.id },
+        { status: { $ne: 'pending' } }
       ]
     });
 
     if (!document) {
-      return res.status(404).json({ error: 'Документ не найден или нет доступа' });
+      return res.status(404).json({ error: 'Document not found or access denied' });
     }
 
     const file = document.files.find(f => f._id.toString() === req.params.fileId);
     if (!file) {
-      return res.status(404).json({ error: 'Файл не найден' });
+      return res.status(404).json({ error: 'File not found' });
     }
 
-    // Перенаправление на URL Cloudinary
     res.json({ url: file.cloudinaryUrl, name: file.originalName });
   } catch (error) {
     console.error('Get file error:', error);
-    res.status(500).json({ error: 'Ошибка при получении файла' });
+    res.status(500).json({ error: 'Failed to get file' });
   }
 });
 
-// Получение данных пользователя
+// Get user data
 app.get('/me', authenticateJWT, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
     if (!user) {
-      return res.status(404).json({ error: 'Пользователь не найден' });
+      return res.status(404).json({ error: 'User not found' });
     }
     res.json(user);
   } catch (error) {
     console.error('Get user error:', error);
-    res.status(500).json({ error: 'Ошибка при получении данных пользователя' });
+    res.status(500).json({ error: 'Failed to get user data' });
   }
 });
 
-// Получение списка проверяющих
+// Get reviewers list
 app.get('/reviewers', authenticateJWT, async (req, res) => {
   try {
-    // Находим всех пользователей с ролью 'reviewer'
     const reviewers = await User.find({ role: 'reviewer' })
       .select('firstName lastName login _id')
       .sort({ lastName: 1, firstName: 1 });
 
-    // Форматируем данные для отправки на фронтенд
     const formattedReviewers = reviewers.map(reviewer => ({
       id: reviewer._id,
       firstName: reviewer.firstName,
       lastName: reviewer.lastName,
-      email: reviewer.login, // Используем login как email для простоты
+      email: reviewer.login,
     }));
 
     res.json(formattedReviewers);
   } catch (error) {
     console.error('Get reviewers error:', error);
-    res.status(500).json({ error: 'Ошибка при получении списка проверяющих' });
+    res.status(500).json({ error: 'Failed to get reviewers list' });
   }
 });
 
-// Запуск сервера
+// Start server
 app.listen(PORT, () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
