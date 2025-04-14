@@ -35,7 +35,7 @@ const upload = multer({
 // Middleware
 app.use(cors({
   origin: process.env.NODE_ENV === 'production'
-    ? ['https://your-production-domain.com']
+    ? ['https://doctoral-studies.vercel.app']
     : ['http://localhost:3001'],
   credentials: true
 }));
