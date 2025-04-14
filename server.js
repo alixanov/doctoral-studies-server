@@ -15,462 +15,342 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 // Настройка Multer для загрузки файлов
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadPath = 'uploads/';
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath);
+    const uploadDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
-    cb(null, uploadPath);
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
-  },
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
 });
-const upload = multer({ storage });
 
-// Разрешенные источники
-const allowedOrigins = [
-  'http://localhost:3000', // Для разработки
-  'https://doctoral-studies.vercel.app', // Для продакшена
-];
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
 
-
-
-
-
-// Middleware для CORS
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Разрешаем запросы без origin (например, от серверных приложений)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        return callback(new Error('Not allowed by CORS'));
-      }
-    },
-    credentials: true, // Разрешаем отправку куки и заголовков авторизации
-  })
-);
-
+// Middleware
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://your-production-domain.com']
+    : ['http://localhost:3001'],
+  credentials: true
+}));
 app.use(express.json());
-// Статическая папка для доступа к загруженным файлам
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Подключение к MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/doctoral', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-  .then(() => console.log('Подключено к MongoDB'))
-  .catch((error) => console.error('Ошибка подключения к MongoDB:', error));
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
-// Схема для учителей
-const TeacherSchema = new mongoose.Schema({
+// Модели данных
+const UserSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
   login: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, default: 'teacher' },
+  role: { type: String, enum: ['doctoral', 'reviewer'], default: 'doctoral' },
+  createdAt: { type: Date, default: Date.now }
 });
 
-const Teacher = mongoose.model('Teacher', TeacherSchema);
-
-// Схема для учеников
-const StudentSchema = new mongoose.Schema({
-  firstName: { type: String, required: true },
-  lastName: { type: String, required: true },
-  login: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  role: { type: String, default: 'student' },
-});
-
-const Student = mongoose.model('Student', StudentSchema);
-
-// Схема для документов
 const DocumentSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
-  role: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   subject: { type: String, required: true },
   recipient: { type: String, required: true },
   content: { type: String, required: true },
   files: [{
-    fieldName: String,
-    filePath: String,
-    fileName: String,
+    fieldName: { type: String, required: true },
+    originalName: { type: String, required: true },
+    path: { type: String, required: true },
+    size: { type: Number, required: true },
+    mimetype: { type: String, required: true }
   }],
-  createdAt: { type: Date, default: Date.now },
+  status: { type: String, enum: ['pending', 'reviewed', 'approved', 'rejected'], default: 'pending' },
+  decisionComment: { type: String },
+  reviewedAt: { type: Date },
+  reviewerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now }
 });
 
+const User = mongoose.model('User', UserSchema);
 const Document = mongoose.model('Document', DocumentSchema);
 
-// Схема для заданий
-const TaskSchema = new mongoose.Schema({
-  studentId: { type: String, required: true },
-  studentName: { type: String, required: true },
-  teacherId: { type: String, required: true },
-  message: { type: String, required: true },
-  status: { type: String, default: 'sent' },
-  createdAt: { type: Date, default: Date.now },
-});
+// Middleware для проверки JWT
+const authenticateJWT = (req, res, next) => {
+  const token = req.headers['authorization'];
 
-const Task = mongoose.model('Task', TaskSchema);
-
-// Схема для решений
-const SolutionSchema = new mongoose.Schema({
-  taskId: { type: String, required: true },
-  studentId: { type: String, required: true },
-  studentName: { type: String, required: true },
-  solution: { type: String, required: true },
-  status: { type: String, default: 'pending' },
-  createdAt: { type: Date, default: Date.now },
-});
-
-const Solution = mongoose.model('Solution', SolutionSchema);
-
-// Регистрация учителя
-app.post('/register-teacher', async (req, res) => {
-  const { firstName, lastName, login, password } = req.body;
-
-  if (!firstName || !lastName || !login || !password) {
-    return res.status(400).json({ error: 'Все поля обязательны' });
-  }
-
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Пароль должен содержать минимум 6 символов' });
-  }
-
-  try {
-    const existingTeacher = await Teacher.findOne({ login });
-    if (existingTeacher) {
-      return res.status(400).json({ error: 'Учитель с таким логином уже существует' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newTeacher = new Teacher({
-      firstName,
-      lastName,
-      login,
-      password: hashedPassword,
-      role: 'teacher',
-    });
-
-    await newTeacher.save();
-    res.status(201).json({ message: 'Учитель успешно зарегистрирован' });
-  } catch (error) {
-    console.error('Ошибка регистрации учителя:', error);
-    res.status(500).json({ error: 'Ошибка при регистрации учителя: ' + error.message });
-  }
-});
-
-// Регистрация ученика
-app.post('/register-student', async (req, res) => {
-  const { firstName, lastName, login, password } = req.body;
-
-  if (!firstName || !lastName || !login || !password) {
-    return res.status(400).json({ error: 'Все поля обязательны' });
-  }
-
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Пароль должен содержать минимум 6 символов' });
-  }
-
-  try {
-    const existingStudent = await Student.findOne({ login });
-    if (existingStudent) {
-      return res.status(400).json({ error: 'Ученик с таким логином уже существует' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newStudent = new Student({
-      firstName,
-      lastName,
-      login,
-      password: hashedPassword,
-      role: 'student',
-    });
-
-    await newStudent.save();
-    res.status(201).json({ message: 'Ученик успешно зарегистрирован' });
-  } catch (error) {
-    console.error('Ошибка регистрации ученика:', error);
-    res.status(500).json({ error: 'Ошибка при регистрации ученика: ' + error.message });
-  }
-});
-
-// Авторизация (общая для учителя и ученика)
-app.post('/login', async (req, res) => {
-  const { login, password, role } = req.body;
-
-  if (!login || !password || !role) {
-    return res.status(400).json({ error: 'Логин, пароль и роль обязательны' });
-  }
-
-  try {
-    let user;
-    if (role === 'teacher') {
-      user = await Teacher.findOne({ login });
-    } else if (role === 'student') {
-      user = await Student.findOne({ login });
-    } else {
-      return res.status(400).json({ error: 'Неверная роль' });
-    }
-
-    if (!user) {
-      return res.status(400).json({ error: 'Неверный логин или пароль' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ error: 'Неверный логин или пароль' });
-    }
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-
-    res.status(200).json({
-      message: 'Авторизация успешна',
-      token: `Bearer ${token}`,
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        login: user.login,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    console.error('Ошибка авторизации:', error);
-    res.status(500).json({ error: 'Ошибка при авторизации: ' + error.message });
-  }
-});
-
-// Middleware для проверки токена
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Токен не предоставлен' });
+  if (!token) return res.sendStatus(401);
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Неверный токен' });
+    if (err) return res.sendStatus(403);
     req.user = user;
     next();
   });
 };
 
-// Отправка документов
-app.post('/submit-documents', authenticateToken, upload.fields([
-  { name: 'file' },
-  { name: 'malumotnoma' },
-  { name: 'photo' },
-  { name: 'passport' },
-  { name: 'kengashBayyonomma' },
-  { name: 'dekanatTaqdimnoma' },
-  { name: 'sinovNatijalari' },
-  { name: 'ilmiyIshlar' },
-  { name: 'annotatsiya' },
-  { name: 'maqolalar' },
-  { name: 'xulosa' },
-  { name: 'testBallari' },
-  { name: 'tarjimaiXol' },
-  { name: 'reytingDaftarcha' },
-  { name: 'guvohnoma' },
-  { name: 'yutuqlar' },
-  { name: 'boshqa' },
-]), async (req, res) => {
-  const { subject, recipient, content } = req.body;
-
-  if (!subject || !recipient || !content) {
-    return res.status(400).json({ error: 'Все текстовые поля обязательны' });
+// Middleware для проверки роли проверяющего
+const checkReviewerRole = (req, res, next) => {
+  if (req.user.role !== 'reviewer') {
+    return res.status(403).json({ error: 'Доступ запрещен' });
   }
+  next();
+};
 
+// Регистрация докторанта
+app.post('/register-doctoral', async (req, res) => {
   try {
-    const files = [];
-    Object.keys(req.files).forEach((key) => {
-      req.files[key].forEach((file) => {
-        files.push({
-          fieldName: key,
-          filePath: file.path,
-          fileName: file.originalname,
-        });
-      });
+    const { firstName, lastName, login, password } = req.body;
+
+    const existingUser = await User.findOne({ login });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({
+      firstName,
+      lastName,
+      login,
+      password: hashedPassword,
+      role: 'doctoral'
     });
 
+    await newUser.save();
+
+    res.status(201).json({ message: 'Докторант успешно зарегистрирован' });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Ошибка при регистрации' });
+  }
+});
+
+// Регистрация проверяющего
+app.post('/register-reviewer', async (req, res) => {
+  try {
+    const { firstName, lastName, login, password } = req.body;
+
+    const existingUser = await User.findOne({ login });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = new User({
+      firstName,
+      lastName,
+      login,
+      password: hashedPassword,
+      role: 'reviewer'
+    });
+
+    await newUser.save();
+
+    res.status(201).json({ message: 'Проверяющий успешно зарегистрирован' });
+  } catch (error) {
+    console.error('Reviewer registration error:', error);
+    res.status(500).json({ error: 'Ошибка при регистрации проверяющего' });
+  }
+});
+
+// Авторизация
+app.post('/login', async (req, res) => {
+  try {
+    const { login, password, role } = req.body;
+
+    const user = await User.findOne({ login, role });
+    if (!user) {
+      return res.status(401).json({ error: 'Неверный логин или роль' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Неверный пароль' });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user._id,
+        login: user.login,
+        role: user.role,
+        firstName: user.firstName,
+        lastName: user.lastName
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    const userData = {
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      login: user.login,
+      role: user.role
+    };
+
+    res.json({ token, user: userData });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Ошибка при авторизации' });
+  }
+});
+
+// Отправка документов докторантом
+app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) => {
+  try {
+    const { subject, recipient, content } = req.body;
+    const userId = req.user.id;
+
+    if (!subject || !recipient || !content) {
+      return res.status(400).json({ error: 'Все текстовые поля обязательны' });
+    }
+
+    // Обработка загруженных файлов
+    const files = req.files.map(file => ({
+      fieldName: file.fieldname,
+      originalName: file.originalname,
+      path: file.path,
+      size: file.size,
+      mimetype: file.mimetype
+    }));
+
     const newDocument = new Document({
-      userId: req.user.id,
-      role: req.user.role,
+      userId,
       subject,
       recipient,
       content,
-      files,
+      files
     });
 
     await newDocument.save();
-    res.status(200).json({ message: 'Документы успешно отправлены' });
+
+    res.status(201).json({
+      message: 'Документы успешно отправлены',
+      documentId: newDocument._id
+    });
   } catch (error) {
-    console.error('Ошибка отправки документов:', error);
-    res.status(500).json({ error: 'Ошибка при отправке документов: ' + error.message });
+    console.error('Document submission error:', error);
+    res.status(500).json({ error: 'Ошибка при отправке документов' });
   }
 });
 
-// Получение списка учеников (для учителя)
-app.get('/students', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
+// Получение всех заявок для проверяющего
+app.get('/applications', authenticateJWT, checkReviewerRole, async (req, res) => {
   try {
-    const students = await Student.find();
-    res.status(200).json(students);
+    const documents = await Document.find({ status: { $in: ['pending', 'reviewed'] } })
+      .populate('userId', 'firstName lastName login')
+      .sort({ createdAt: -1 })
+      .select('-files.path');
+
+    const formattedDocs = documents.map(doc => ({
+      ...doc.toObject(),
+      applicantName: `${doc.userId.firstName} ${doc.userId.lastName}`
+    }));
+
+    res.json(formattedDocs);
   } catch (error) {
-    console.error('Ошибка получения учеников:', error);
-    res.status(500).json({ error: 'Ошибка при получении учеников' });
+    console.error('Get applications error:', error);
+    res.status(500).json({ error: 'Ошибка при получении заявок' });
   }
 });
 
-// Отправка задания ученику (для учителя)
-app.post('/send-task', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
-  const { studentId, studentName, message } = req.body;
-
-  if (!studentId || !studentName || !message) {
-    return res.status(400).json({ error: 'Все поля обязательны' });
-  }
-
+// Обновление статуса заявки проверяющим
+app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async (req, res) => {
   try {
-    const newTask = new Task({
-      studentId,
-      studentName,
-      teacherId: req.user.id,
-      message,
+    const { status, comment } = req.body;
+    const { id } = req.params;
+
+    if (!status || !['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Неверный статус' });
+    }
+
+    const updatedDoc = await Document.findByIdAndUpdate(
+      id,
+      {
+        status,
+        decisionComment: comment,
+        reviewedAt: new Date(),
+        reviewerId: req.user.id
+      },
+      { new: true }
+    ).populate('userId', 'firstName lastName login');
+
+    if (!updatedDoc) {
+      return res.status(404).json({ error: 'Документ не найден' });
+    }
+
+    const responseDoc = {
+      ...updatedDoc.toObject(),
+      applicantName: `${updatedDoc.userId.firstName} ${updatedDoc.userId.lastName}`
+    };
+
+    res.json(responseDoc);
+  } catch (error) {
+    console.error('Decision error:', error);
+    res.status(500).json({ error: 'Ошибка при обновлении статуса' });
+  }
+});
+
+// Получение документов пользователя
+app.get('/user-documents', authenticateJWT, async (req, res) => {
+  try {
+    const documents = await Document.find({ userId: req.user.id })
+      .sort({ createdAt: -1 })
+      .select('-files.path');
+
+    res.json(documents);
+  } catch (error) {
+    console.error('Get documents error:', error);
+    res.status(500).json({ error: 'Ошибка при получении документов' });
+  }
+});
+
+// Скачивание файла
+app.get('/download-file/:documentId/:fileId', authenticateJWT, async (req, res) => {
+  try {
+    const document = await Document.findOne({
+      _id: req.params.documentId,
+      $or: [
+        { userId: req.user.id }, // Докторант может скачать свои файлы
+        { reviewerId: req.user.id } // Проверяющий может скачать файлы заявок, которые он проверял
+      ]
     });
 
-    await newTask.save();
-    res.status(200).json({ message: 'Задание успешно отправлено!', task: newTask });
-  } catch (error) {
-    console.error('Ошибка отправки задания:', error);
-    res.status(500).json({ error: 'Ошибка при отправке задания: ' + error.message });
-  }
-});
-
-// Получение списка заданий учителя
-app.get('/tasks', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
-  try {
-    const tasks = await Task.find({ teacherId: req.user.id });
-    res.status(200).json(tasks);
-  } catch (error) {
-    console.error('Ошибка получения заданий:', error);
-    res.status(500).json({ error: 'Ошибка при получении заданий' });
-  }
-});
-
-// Получение заданий для ученика
-app.get('/student-tasks', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'student') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
-  try {
-    const tasks = await Task.find({ studentId: req.user.id });
-    res.status(200).json(tasks);
-  } catch (error) {
-    console.error('Ошибка получения заданий:', error);
-    res.status(500).json({ error: 'Ошибка при получении заданий' });
-  }
-});
-
-// Отправка решения (для ученика)
-app.post('/send-solution', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'student') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
-  const { taskId, solution } = req.body;
-
-  if (!taskId || !solution) {
-    return res.status(400).json({ error: 'Все поля обязательны' });
-  }
-
-  try {
-    const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Задание не найдено' });
+    if (!document) {
+      return res.status(404).json({ error: 'Документ не найден или нет доступа' });
     }
 
-    if (task.studentId !== req.user.id) {
-      return res.status(403).json({ error: 'Это задание не предназначено для вас' });
+    const file = document.files.id(req.params.fileId);
+    if (!file) {
+      return res.status(404).json({ error: 'Файл не найден' });
     }
 
-    task.status = 'completed';
-    await task.save();
-
-    const student = await Student.findById(req.user.id);
-    const newSolution = new Solution({
-      taskId,
-      studentId: req.user.id,
-      studentName: `${student.firstName} ${student.lastName}`,
-      solution,
-    });
-
-    await newSolution.save();
-    res.status(200).json({ message: 'Решение успешно отправлено!' });
+    res.download(file.path, file.originalName);
   } catch (error) {
-    console.error('Ошибка отправки решения:', error);
-    res.status(500).json({ error: 'Ошибка при отправке решения: ' + error.message });
+    console.error('Download error:', error);
+    res.status(500).json({ error: 'Ошибка при скачивании файла' });
   }
 });
 
-// Получение списка решений (для учителя)
-app.get('/solutions', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
+// Получение данных пользователя
+app.get('/me', authenticateJWT, async (req, res) => {
   try {
-    const tasks = await Task.find({ teacherId: req.user.id });
-    const taskIds = tasks.map(task => task._id);
-    const solutions = await Solution.find({ taskId: { $in: taskIds } });
-    res.status(200).json(solutions);
-  } catch (error) {
-    console.error('Ошибка получения решений:', error);
-    res.status(500).json({ error: 'Ошибка при получении решений' });
-  }
-});
-
-// Отметка решения как проверенного (для учителя)
-app.post('/check-solution', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-
-  const { solutionId } = req.body;
-
-  if (!solutionId) {
-    return res.status(400).json({ error: 'solutionId обязателен' });
-  }
-
-  try {
-    const solution = await Solution.findById(solutionId);
-    if (!solution) {
-      return res.status(404).json({ error: 'Решение не найдено' });
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
     }
-
-    solution.status = 'checked';
-    await solution.save();
-    res.status(200).json({ message: 'Решение отмечено как проверенное' });
+    res.json(user);
   } catch (error) {
-    console.error('Ошибка проверки решения:', error);
-    res.status(500).json({ error: 'Ошибка при проверке решения: ' + error.message });
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Ошибка при получении данных пользователя' });
   }
 });
 
