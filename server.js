@@ -35,11 +35,11 @@ const upload = multer({
 });
 
 // Middleware
+// Configure CORS to allow requests from your frontend
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://doctoral-studies.vercel.app']
-    : ['http://localhost:3001'],
-  credentials: true
+  origin: ['http://localhost:3001', 'https://doctoral-studies.vercel.app'], // Allow these origins
+  methods: ['GET', 'POST', 'PUT', 'DELETE'], // Allow these methods
+  allowedHeaders: ['Content-Type', 'Authorization'], // Allow these headers
 }));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
