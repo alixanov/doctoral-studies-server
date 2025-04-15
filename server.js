@@ -5,7 +5,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const multer = require('multer');
-const path = require('path');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 require('dotenv').config();
@@ -21,8 +20,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
-// Cloudinary Storage for multer
-const storage = new CloudinaryStorage({
+// Cloudinary Storage configurations
+const documentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'doctoral_documents',
@@ -31,17 +30,31 @@ const storage = new CloudinaryStorage({
   }
 });
 
-const upload = multer({
-  storage: storage,
+const profilePhotoStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'doctoral_profile_photos',
+    allowed_formats: ['jpg', 'jpeg', 'png'],
+    transformation: [{ width: 500, height: 500, crop: 'fill', gravity: 'face' }]
+  }
+});
+
+const uploadDocuments = multer({
+  storage: documentStorage,
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
-// Middleware
-app.use(cors({
-  origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+const uploadProfilePhoto = multer({
+  storage: profilePhotoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
+
+// // Middleware
+// app.use(cors({
+//   origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
+//   methods: ['GET', 'POST', 'PUT', 'DELETE'],
+//   allowedHeaders: ['Content-Type', 'Authorization'],
+// }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -60,6 +73,7 @@ const UserSchema = new mongoose.Schema({
   login: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['doctoral', 'reviewer'], default: 'doctoral' },
+  profilePhoto: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -107,116 +121,128 @@ const checkReviewerRole = (req, res, next) => {
   next();
 };
 
-// Doctoral registration
-app.post('/register-doctoral', async (req, res) => {
-  try {
-    const { firstName, lastName, login, password } = req.body;
+// Error handling wrapper
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
-    const existingUser = await User.findOne({ login });
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
+// Routes
+// Upload profile photo
+app.post('/upload-profile-photo',
+  authenticateJWT,
+  uploadProfilePhoto.single('profilePhoto'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { profilePhoto: req.file.path },
+      { new: true }
+    ).select('-password');
 
-    const newUser = new User({
-      firstName,
-      lastName,
-      login,
-      password: hashedPassword,
-      role: 'doctoral'
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      message: 'Profile photo uploaded successfully',
+      profilePhotoUrl: user.profilePhoto
     });
+  })
+);
 
-    await newUser.save();
+// Doctoral registration
+app.post('/register-doctoral', asyncHandler(async (req, res) => {
+  const { firstName, lastName, login, password } = req.body;
 
-    res.status(201).json({ message: 'Doctoral student registered successfully' });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ error: 'Registration failed' });
+  const existingUser = await User.findOne({ login });
+  if (existingUser) {
+    return res.status(400).json({ error: 'User already exists' });
   }
-});
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const newUser = new User({
+    firstName,
+    lastName,
+    login,
+    password: hashedPassword,
+    role: 'doctoral'
+  });
+
+  await newUser.save();
+  res.status(201).json({ message: 'Doctoral student registered successfully' });
+}));
 
 // Reviewer registration
-app.post('/register-reviewer', async (req, res) => {
-  try {
-    const { firstName, lastName, login, password } = req.body;
+app.post('/register-reviewer', asyncHandler(async (req, res) => {
+  const { firstName, lastName, login, password } = req.body;
 
-    const existingUser = await User.findOne({ login });
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const newUser = new User({
-      firstName,
-      lastName,
-      login,
-      password: hashedPassword,
-      role: 'reviewer'
-    });
-
-    await newUser.save();
-
-
-
-    
-    res.status(201).json({ message: 'Reviewer registered successfully' });
-  } catch (error) {
-    console.error('Reviewer registration error:', error);
-    res.status(500).json({ error: 'Reviewer registration failed' });
+  const existingUser = await User.findOne({ login });
+  if (existingUser) {
+    return res.status(400).json({ error: 'User already exists' });
   }
-});
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const newUser = new User({
+    firstName,
+    lastName,
+    login,
+    password: hashedPassword,
+    role: 'reviewer'
+  });
+
+  await newUser.save();
+  res.status(201).json({ message: 'Reviewer registered successfully' });
+}));
 
 // Login
-app.post('/login', async (req, res) => {
-  try {
-    const { login, password, role } = req.body;
+app.post('/login', asyncHandler(async (req, res) => {
+  const { login, password, role } = req.body;
 
-    const user = await User.findOne({ login, role });
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid login or role' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid password' });
-    }
-
-    const token = jwt.sign(
-      {
-        id: user._id,
-        login: user.login,
-        role: user.role,
-        firstName: user.firstName,
-        lastName: user.lastName
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    const userData = {
-      id: user._id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      login: user.login,
-      role: user.role
-    };
-
-    res.json({ token, user: userData });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
+  const user = await User.findOne({ login, role });
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid login or role' });
   }
-});
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+
+  const token = jwt.sign(
+    {
+      id: user._id,
+      login: user.login,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName
+    },
+    JWT_SECRET,
+    { expiresIn: '24h' }
+  );
+
+  const userData = {
+    id: user._id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    login: user.login,
+    role: user.role,
+    profilePhoto: user.profilePhoto
+  };
+
+  res.json({ token, user: userData });
+}));
 
 // Document submission
-app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) => {
-  try {
+app.post('/submit-documents',
+  authenticateJWT,
+  uploadDocuments.any(),
+  asyncHandler(async (req, res) => {
     const { subject, recipient, content } = req.body;
     const userId = req.user.id;
 
-    // Validation
     if (!subject || !recipient || !content) {
       return res.status(400).json({
         error: 'All fields are required',
@@ -229,9 +255,7 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
     }
 
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({
-        error: 'At least one file is required'
-      });
+      return res.status(400).json({ error: 'At least one file is required' });
     }
 
     const maxFileSize = 10 * 1024 * 1024; // 10MB
@@ -268,50 +292,33 @@ app.post('/submit-documents', authenticateJWT, upload.any(), async (req, res) =>
       documentId: newDocument._id,
       filesCount: files.length
     });
-
-  } catch (error) {
-    console.error('Document submission error:', error);
-
-    if (req.files && req.files.length > 0) {
-      try {
-        await Promise.all(
-          req.files.map(file =>
-            cloudinary.uploader.destroy(file.filename)
-          ))
-      } catch (cloudinaryError) {
-        console.error('Error cleaning up files:', cloudinaryError);
-      }
-    }
-
-    res.status(500).json({
-      error: 'Document submission failed',
-      details: error.message
-    });
-  }
-});
+  })
+);
 
 // Get applications for reviewer
-app.get('/applications', authenticateJWT, checkReviewerRole, async (req, res) => {
-  try {
+app.get('/applications',
+  authenticateJWT,
+  checkReviewerRole,
+  asyncHandler(async (req, res) => {
     const documents = await Document.find({ status: { $in: ['pending', 'reviewed'] } })
-      .populate('userId', 'firstName lastName login')
+      .populate('userId', 'firstName lastName login profilePhoto')
       .sort({ createdAt: -1 });
 
     const formattedDocs = documents.map(doc => ({
       ...doc.toObject(),
-      applicantName: `${doc.userId.firstName} ${doc.userId.lastName}`
+      applicantName: `${doc.userId.firstName} ${doc.userId.lastName}`,
+      applicantPhoto: doc.userId.profilePhoto
     }));
 
     res.json(formattedDocs);
-  } catch (error) {
-    console.error('Get applications error:', error);
-    res.status(500).json({ error: 'Failed to get applications' });
-  }
-});
+  })
+);
 
 // Update application status
-app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async (req, res) => {
-  try {
+app.put('/applications/:id/decision',
+  authenticateJWT,
+  checkReviewerRole,
+  asyncHandler(async (req, res) => {
     const { status, comment } = req.body;
     const { id } = req.params;
 
@@ -328,7 +335,7 @@ app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async 
         reviewerId: req.user.id
       },
       { new: true }
-    ).populate('userId', 'firstName lastName login');
+    ).populate('userId', 'firstName lastName login profilePhoto');
 
     if (!updatedDoc) {
       return res.status(404).json({ error: 'Document not found' });
@@ -336,32 +343,29 @@ app.put('/applications/:id/decision', authenticateJWT, checkReviewerRole, async 
 
     const responseDoc = {
       ...updatedDoc.toObject(),
-      applicantName: `${updatedDoc.userId.firstName} ${updatedDoc.userId.lastName}`
+      applicantName: `${updatedDoc.userId.firstName} ${updatedDoc.userId.lastName}`,
+      applicantPhoto: updatedDoc.userId.profilePhoto
     };
 
     res.json(responseDoc);
-  } catch (error) {
-    console.error('Decision error:', error);
-    res.status(500).json({ error: 'Failed to update status' });
-  }
-});
+  })
+);
 
 // Get user documents
-app.get('/user-documents', authenticateJWT, async (req, res) => {
-  try {
+app.get('/user-documents',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
     const documents = await Document.find({ userId: req.user.id })
       .sort({ createdAt: -1 });
 
     res.json(documents);
-  } catch (error) {
-    console.error('Get documents error:', error);
-    res.status(500).json({ error: 'Failed to get documents' });
-  }
-});
+  })
+);
 
 // Get file URL
-app.get('/file/:documentId/:fileId', authenticateJWT, async (req, res) => {
-  try {
+app.get('/file/:documentId/:fileId',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
     const document = await Document.findOne({
       _id: req.params.documentId,
       $or: [
@@ -381,31 +385,27 @@ app.get('/file/:documentId/:fileId', authenticateJWT, async (req, res) => {
     }
 
     res.json({ url: file.cloudinaryUrl, name: file.originalName });
-  } catch (error) {
-    console.error('Get file error:', error);
-    res.status(500).json({ error: 'Failed to get file' });
-  }
-});
+  })
+);
 
 // Get user data
-app.get('/me', authenticateJWT, async (req, res) => {
-  try {
+app.get('/me',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
     const user = await User.findById(req.user.id).select('-password');
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     res.json(user);
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Failed to get user data' });
-  }
-});
+  })
+);
 
 // Get reviewers list
-app.get('/reviewers', authenticateJWT, async (req, res) => {
-  try {
+app.get('/reviewers',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
     const reviewers = await User.find({ role: 'reviewer' })
-      .select('firstName lastName login _id')
+      .select('firstName lastName login profilePhoto _id')
       .sort({ lastName: 1, firstName: 1 });
 
     const formattedReviewers = reviewers.map(reviewer => ({
@@ -413,13 +413,17 @@ app.get('/reviewers', authenticateJWT, async (req, res) => {
       firstName: reviewer.firstName,
       lastName: reviewer.lastName,
       email: reviewer.login,
+      profilePhoto: reviewer.profilePhoto
     }));
 
     res.json(formattedReviewers);
-  } catch (error) {
-    console.error('Get reviewers error:', error);
-    res.status(500).json({ error: 'Failed to get reviewers list' });
-  }
+  })
+);
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server
