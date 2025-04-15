@@ -49,12 +49,12 @@ const uploadProfilePhoto = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 
-// // Middleware
-// app.use(cors({
-//   origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
-//   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-//   allowedHeaders: ['Content-Type', 'Authorization'],
-// }));
+// Middleware
+app.use(cors({
+  origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
