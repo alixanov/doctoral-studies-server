@@ -1,4 +1,3 @@
-// Server-side (backend) - server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -34,7 +33,7 @@ const profilePhotoStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'doctoral_profile_photos',
-    allowed_formats: ['jpg', 'jpeg', 'png'],
+    allowed_formats: ['jpg', 'jpeg', 'png',],
     transformation: [{ width: 500, height: 500, crop: 'fill', gravity: 'face' }]
   }
 });
@@ -51,7 +50,7 @@ const uploadProfilePhoto = multer({
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
+  origin: ['http://localhost:3002', 'https://doctoral-studies.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -63,8 +62,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/doctoral'
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .then(() => console.log('Подключено к MongoDB'))
+  .catch(err => console.error('Ошибка подключения MongoDB:', err));
 
 // Data models
 const UserSchema = new mongoose.Schema({
@@ -75,6 +74,20 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, enum: ['doctoral', 'reviewer'], default: 'doctoral' },
   profilePhoto: { type: String },
   createdAt: { type: Date, default: Date.now }
+});
+
+const AssessmentSchema = new mongoose.Schema({
+  senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  recipientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  questions: [{
+    question: { type: String, required: true },
+    answer: { type: String, default: '' },
+    rating: { type: Number, min: 0, max: 20, default: 0 }
+  }],
+  status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
+  feedback: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  completedAt: { type: Date }
 });
 
 const DocumentSchema = new mongoose.Schema({
@@ -98,6 +111,7 @@ const DocumentSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', UserSchema);
+const Assessment = mongoose.model('Assessment', AssessmentSchema);
 const Document = mongoose.model('Document', DocumentSchema);
 
 // JWT authentication middleware
@@ -116,7 +130,7 @@ const authenticateJWT = (req, res, next) => {
 // Reviewer role check middleware
 const checkReviewerRole = (req, res, next) => {
   if (req.user.role !== 'reviewer') {
-    return res.status(403).json({ error: 'Access denied' });
+    return res.status(403).json({ error: 'Доступ запрещен' });
   }
   next();
 };
@@ -133,7 +147,7 @@ app.post('/upload-profile-photo',
   uploadProfilePhoto.single('profilePhoto'),
   asyncHandler(async (req, res) => {
     if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+      return res.status(400).json({ error: 'Ни один файл не загружен' });
     }
 
     const user = await User.findByIdAndUpdate(
@@ -143,11 +157,11 @@ app.post('/upload-profile-photo',
     ).select('-password');
 
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
     res.json({
-      message: 'Profile photo uploaded successfully',
+      message: 'Фотография профиля успешно загружена',
       profilePhotoUrl: user.profilePhoto
     });
   })
@@ -159,7 +173,7 @@ app.post('/register-doctoral', asyncHandler(async (req, res) => {
 
   const existingUser = await User.findOne({ login });
   if (existingUser) {
-    return res.status(400).json({ error: 'User already exists' });
+    return res.status(400).json({ error: 'Пользователь уже существует' });
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
@@ -172,7 +186,7 @@ app.post('/register-doctoral', asyncHandler(async (req, res) => {
   });
 
   await newUser.save();
-  res.status(201).json({ message: 'Doctoral student registered successfully' });
+  res.status(201).json({ message: 'Докторант успешно зарегистрирован' });
 }));
 
 // Reviewer registration
@@ -181,7 +195,7 @@ app.post('/register-reviewer', asyncHandler(async (req, res) => {
 
   const existingUser = await User.findOne({ login });
   if (existingUser) {
-    return res.status(400).json({ error: 'User already exists' });
+    return res.status(400).json({ error: 'Пользователь уже существует' });
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
@@ -194,7 +208,7 @@ app.post('/register-reviewer', asyncHandler(async (req, res) => {
   });
 
   await newUser.save();
-  res.status(201).json({ message: 'Reviewer registered successfully' });
+  res.status(201).json({ message: 'Рецензент успешно зарегистрирован' });
 }));
 
 // Login
@@ -203,12 +217,12 @@ app.post('/login', asyncHandler(async (req, res) => {
 
   const user = await User.findOne({ login, role });
   if (!user) {
-    return res.status(401).json({ error: 'Invalid login or role' });
+    return res.status(401).json({ error: 'Неверный логин или роль' });
   }
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
-    return res.status(401).json({ error: 'Invalid password' });
+    return res.status(401).json({ error: 'Неверный пароль' });
   }
 
   const token = jwt.sign(
@@ -234,6 +248,104 @@ app.post('/login', asyncHandler(async (req, res) => {
 
   res.json({ token, user: userData });
 }));
+
+// Submit assessment (questions)
+app.post('/submit-assessment',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
+    const { recipient, answers } = req.body;
+    const senderId = req.user.id;
+
+    if (!recipient || !answers || !Array.isArray(answers)) {
+      return res.status(400).json({ error: 'Получатель и ответы обязательны' });
+    }
+
+    // Find recipient by email (login)
+    const recipientUser = await User.findOne({ login: recipient, role: 'reviewer' });
+    if (!recipientUser) {
+      return res.status(404).json({ error: 'Рецензент не найден' });
+    }
+
+    const newAssessment = new Assessment({
+      senderId,
+      recipientId: recipientUser._id,
+      questions: answers
+    });
+
+    await newAssessment.save();
+
+    res.status(201).json({ message: 'Оценка успешно отправлена' });
+  })
+);
+
+
+// Обновите запрос на сервере для submitted-assessments:
+app.get('/submitted-assessments',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
+    try {
+      const assessments = await Assessment.find({
+        senderId: req.user.id,
+        status: 'pending'
+      })
+        .populate('recipientId', 'firstName lastName profilePhoto')
+        .sort({ createdAt: -1 });
+
+      const formattedAssessments = assessments.map(assessment => ({
+        _id: assessment._id,
+        reviewerInfo: {
+          firstName: assessment.recipientId.firstName,
+          lastName: assessment.recipientId.lastName,
+          profilePhoto: assessment.recipientId.profilePhoto
+        },
+        questions: assessment.questions,
+        status: assessment.status,
+        createdAt: assessment.createdAt,
+        completedAt: assessment.completedAt
+      }));
+
+      res.json(formattedAssessments);
+    } catch (error) {
+      console.error('Error fetching submitted assessments:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  })
+);
+
+// Добавьте функцию formatDate в компоненте:
+const formatDate = (dateString) => {
+  try {
+    const date = parseISO(dateString);
+    if (!isValid(date)) {
+      return 'Недействительная дата';
+    }
+    return format(date, 'dd MMMM yyyy, HH:mm', { locale: ru });
+  } catch (error) {
+    console.error("Ошибка форматирования даты:", error);
+    return 'Ошибка даты';
+  }
+};
+
+
+// Get reviewers list
+app.get('/reviewers',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
+    const reviewers = await User.find({ role: 'reviewer' })
+      .select('firstName lastName login profilePhoto _id')
+      .sort({ lastName: 1, firstName: 1 });
+
+    const formattedReviewers = reviewers.map(reviewer => ({
+      id: reviewer._id,
+      firstName: reviewer.firstName,
+      lastName: reviewer.lastName,
+      email: reviewer.login,
+      profilePhoto: reviewer.profilePhoto
+    }));
+
+    res.json(formattedReviewers);
+  })
+);
 
 // Document submission
 app.post('/submit-documents',
@@ -323,7 +435,7 @@ app.put('/applications/:id/decision',
     const { id } = req.params;
 
     if (!status || !['approved', 'rejected'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
+      return res.status(400).json({ error: 'Неверный статус' });
     }
 
     const updatedDoc = await Document.findByIdAndUpdate(
@@ -388,6 +500,135 @@ app.get('/file/:documentId/:fileId',
   })
 );
 
+app.get('/reviewer-assessments',
+  authenticateJWT,
+  checkReviewerRole,
+  asyncHandler(async (req, res) => {
+    try {
+      const assessments = await Assessment.find({
+        recipientId: req.user.id,
+        status: 'pending'
+      })
+        .populate('senderId', 'firstName lastName profilePhoto')
+        .sort({ createdAt: -1 });
+
+      const formattedAssessments = assessments.map(assessment => ({
+        _id: assessment._id,
+        userInfo: {
+          firstName: assessment.senderId.firstName,
+          lastName: assessment.senderId.lastName,
+          profilePhoto: assessment.senderId.profilePhoto
+        },
+        answers: assessment.questions.map(q => ({
+          question: q.question,
+          answer: q.answer,
+          _id: q._id
+        })),
+        status: assessment.status,
+        createdAt: assessment.createdAt
+      }));
+
+      res.json(formattedAssessments);
+    } catch (error) {
+      console.error('Error fetching reviewer assessments:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  })
+);
+// Submit review for assessment
+app.post('/submit-review',
+  authenticateJWT,
+  checkReviewerRole,
+  asyncHandler(async (req, res) => {
+    const { assessmentId, answers, feedback } = req.body;
+
+    console.log('Received review data:', req.body);
+
+    // Улучшенная валидация
+    if (!assessmentId) {
+      return res.status(400).json({ error: 'Assessment ID is required' });
+    }
+
+    if (!answers || !Array.isArray(answers)) {
+      return res.status(400).json({
+        error: 'Assessment ID and answers are required',
+        details: {
+          hasAnswers: !!answers,
+          isArray: Array.isArray(answers),
+          receivedData: req.body
+        }
+      });
+    }
+
+    const assessment = await Assessment.findById(assessmentId);
+    if (!assessment) {
+      return res.status(404).json({ error: 'Assessment not found' });
+    }
+
+    if (assessment.recipientId.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You are not assigned to review this assessment' });
+    }
+
+    // Проверка соответствия количества ответов количеству вопросов
+    if (assessment.questions.length !== answers.length) {
+      return res.status(400).json({
+        error: 'Number of answers does not match number of questions',
+        expected: assessment.questions.length,
+        received: answers.length
+      });
+    }
+
+    // Обновляем вопросы с оценками
+    assessment.questions = assessment.questions.map((question, index) => ({
+      question: question.question,
+      answer: question.answer, // Сохраняем оригинальный ответ
+      rating: answers[index].rating // Добавляем оценку из отзыва
+    }));
+
+    assessment.feedback = feedback;
+    assessment.status = 'completed';
+    assessment.completedAt = new Date();
+
+    await assessment.save();
+
+    res.json({
+      message: 'Review submitted successfully',
+      assessment: {
+        _id: assessment._id,
+        status: assessment.status,
+        feedback: assessment.feedback,
+        completedAt: assessment.completedAt
+      }
+    });
+  })
+);
+// Get completed assessments for doctoral student
+app.get('/completed-assessments',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
+    const assessments = await Assessment.find({
+      senderId: req.user.id,
+      status: 'completed'
+    })
+      .populate('recipientId', 'firstName lastName profilePhoto')
+      .sort({ completedAt: -1 });
+
+    const formattedAssessments = assessments.map(assessment => ({
+      _id: assessment._id,
+      reviewerInfo: {
+        firstName: assessment.recipientId.firstName,
+        lastName: assessment.recipientId.lastName,
+        profilePhoto: assessment.recipientId.profilePhoto
+      },
+      questions: assessment.questions,
+      feedback: assessment.feedback,
+      completedAt: assessment.completedAt
+    }));
+
+    res.json(formattedAssessments);
+  })
+);
+
 // Get user data
 app.get('/me',
   authenticateJWT,
@@ -400,25 +641,35 @@ app.get('/me',
   })
 );
 
-// Get reviewers list
-app.get('/reviewers',
+// Get completed assessments for reviewer
+app.get('/completed-assessments-reviewer',
   authenticateJWT,
+  checkReviewerRole,
   asyncHandler(async (req, res) => {
-    const reviewers = await User.find({ role: 'reviewer' })
-      .select('firstName lastName login profilePhoto _id')
-      .sort({ lastName: 1, firstName: 1 });
+    const assessments = await Assessment.find({
+      recipientId: req.user.id,
+      status: 'completed'
+    })
+      .populate('senderId', 'firstName lastName profilePhoto')
+      .sort({ completedAt: -1 });
 
-    const formattedReviewers = reviewers.map(reviewer => ({
-      id: reviewer._id,
-      firstName: reviewer.firstName,
-      lastName: reviewer.lastName,
-      email: reviewer.login,
-      profilePhoto: reviewer.profilePhoto
+    const formattedAssessments = assessments.map(assessment => ({
+      _id: assessment._id,
+      userInfo: {
+        firstName: assessment.senderId.firstName,
+        lastName: assessment.senderId.lastName,
+        profilePhoto: assessment.senderId.profilePhoto
+      },
+      questions: assessment.questions,
+      feedback: assessment.feedback,
+      completedAt: assessment.completedAt,
+      status: assessment.status
     }));
 
-    res.json(formattedReviewers);
+    res.json(formattedAssessments);
   })
 );
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
