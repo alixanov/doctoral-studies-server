@@ -33,7 +33,7 @@ const profilePhotoStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'doctoral_profile_photos',
-    allowed_formats: ['jpg', 'jpeg', 'png',],
+    allowed_formats: ['jpg', 'jpeg', 'png'],
     transformation: [{ width: 500, height: 500, crop: 'fill', gravity: 'face' }]
   }
 });
@@ -82,10 +82,11 @@ const AssessmentSchema = new mongoose.Schema({
   questions: [{
     question: { type: String, required: true },
     answer: { type: String, default: '' },
-    rating: { type: Number, min: 0, max: 20, default: 0 }
+    rating: { type: Number, min: 0, max: 20, default: 0 },
+    feedback: { type: String, default: '' } // Комментарий к каждому вопросу
   }],
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
-  feedback: { type: String, default: '' },
+  feedback: { type: String, default: '' }, // Итоговый комментарий
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date }
 });
@@ -278,8 +279,7 @@ app.post('/submit-assessment',
   })
 );
 
-
-// Обновите запрос на сервере для submitted-assessments:
+// Get submitted assessments
 app.get('/submitted-assessments',
   authenticateJWT,
   asyncHandler(async (req, res) => {
@@ -311,21 +311,6 @@ app.get('/submitted-assessments',
     }
   })
 );
-
-// Добавьте функцию formatDate в компоненте:
-const formatDate = (dateString) => {
-  try {
-    const date = parseISO(dateString);
-    if (!isValid(date)) {
-      return 'Недействительная дата';
-    }
-    return format(date, 'dd MMMM yyyy, HH:mm', { locale: ru });
-  } catch (error) {
-    console.error("Ошибка форматирования даты:", error);
-    return 'Ошибка даты';
-  }
-};
-
 
 // Get reviewers list
 app.get('/reviewers',
@@ -500,6 +485,7 @@ app.get('/file/:documentId/:fileId',
   })
 );
 
+// Get reviewer assessments
 app.get('/reviewer-assessments',
   authenticateJWT,
   checkReviewerRole,
@@ -522,6 +508,7 @@ app.get('/reviewer-assessments',
         answers: assessment.questions.map(q => ({
           question: q.question,
           answer: q.answer,
+          feedback: q.feedback || '',
           _id: q._id
         })),
         status: assessment.status,
@@ -535,6 +522,7 @@ app.get('/reviewer-assessments',
     }
   })
 );
+
 // Submit review for assessment
 app.post('/submit-review',
   authenticateJWT,
@@ -551,7 +539,7 @@ app.post('/submit-review',
 
     if (!answers || !Array.isArray(answers)) {
       return res.status(400).json({
-        error: 'Assessment ID and answers are required',
+        error: 'Answers are required',
         details: {
           hasAnswers: !!answers,
           isArray: Array.isArray(answers),
@@ -578,11 +566,12 @@ app.post('/submit-review',
       });
     }
 
-    // Обновляем вопросы с оценками
+    // Обновляем вопросы с оценками и комментариями
     assessment.questions = assessment.questions.map((question, index) => ({
       question: question.question,
-      answer: question.answer, // Сохраняем оригинальный ответ
-      rating: answers[index].rating // Добавляем оценку из отзыва
+      answer: question.answer,
+      rating: answers[index].rating,
+      feedback: answers[index].feedback || ''
     }));
 
     assessment.feedback = feedback;
@@ -602,6 +591,7 @@ app.post('/submit-review',
     });
   })
 );
+
 // Get completed assessments for doctoral student
 app.get('/completed-assessments',
   authenticateJWT,
@@ -626,18 +616,6 @@ app.get('/completed-assessments',
     }));
 
     res.json(formattedAssessments);
-  })
-);
-
-// Get user data
-app.get('/me',
-  authenticateJWT,
-  asyncHandler(async (req, res) => {
-    const user = await User.findById(req.user.id).select('-password');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
   })
 );
 
@@ -670,6 +648,17 @@ app.get('/completed-assessments-reviewer',
   })
 );
 
+// Get user data
+app.get('/me',
+  authenticateJWT,
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(user);
+  })
+);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
