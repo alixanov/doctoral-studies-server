@@ -50,7 +50,7 @@ const uploadProfilePhoto = multer({
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3002', 'https://doctoral-studies.vercel.app'],
+  origin: ['http://localhost:3001', 'https://doctoral-studies.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
