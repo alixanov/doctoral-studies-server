@@ -50,7 +50,7 @@ const uploadProfilePhoto = multer({
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3001', 'https://doctoral-studies.vercel.app'],
+  origin: ['http://localhost:3000', 'https://doctoral-studies.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -82,11 +82,12 @@ const AssessmentSchema = new mongoose.Schema({
   questions: [{
     question: { type: String, required: true },
     answer: { type: String, default: '' },
-    rating: { type: Number, min: 0, max: 20, default: 0 },
-    feedback: { type: String, default: '' } // Комментарий к каждому вопросу
+    rating: { type: Number, min: 0, default: 0 },
+    subRatings: [{ type: Number, min: 0 }], // Sub-ratings for specific questions
+    feedback: { type: String, default: '' }
   }],
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
-  feedback: { type: String, default: '' }, // Итоговый комментарий
+  feedback: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
   completedAt: { type: Date }
 });
@@ -508,6 +509,8 @@ app.get('/reviewer-assessments',
         answers: assessment.questions.map(q => ({
           question: q.question,
           answer: q.answer,
+          rating: q.rating || 0,
+          subRatings: q.subRatings || [],
           feedback: q.feedback || '',
           _id: q._id
         })),
@@ -532,7 +535,6 @@ app.post('/submit-review',
 
     console.log('Received review data:', req.body);
 
-    // Улучшенная валидация
     if (!assessmentId) {
       return res.status(400).json({ error: 'Assessment ID is required' });
     }
@@ -557,7 +559,6 @@ app.post('/submit-review',
       return res.status(403).json({ error: 'You are not assigned to review this assessment' });
     }
 
-    // Проверка соответствия количества ответов количеству вопросов
     if (assessment.questions.length !== answers.length) {
       return res.status(400).json({
         error: 'Number of answers does not match number of questions',
@@ -566,11 +567,12 @@ app.post('/submit-review',
       });
     }
 
-    // Обновляем вопросы с оценками и комментариями
+    // Update questions with ratings, sub-ratings, and feedback
     assessment.questions = assessment.questions.map((question, index) => ({
       question: question.question,
       answer: question.answer,
       rating: answers[index].rating,
+      subRatings: answers[index].subRatings || [],
       feedback: answers[index].feedback || ''
     }));
 
